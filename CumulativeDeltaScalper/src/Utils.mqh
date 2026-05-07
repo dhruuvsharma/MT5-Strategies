@@ -21,35 +21,34 @@ void GetDailyStats(double &todayPnL, int &todayTrades)
    today.sec  = 0;
    datetime dayStart = StructToTime(today);
 
-   //--- Request history for today
-   if(!HistorySelect(dayStart, TimeCurrent()))
-      return;
-
-   int totalDeals = HistoryDealsTotal();
-   for(int i = 0; i < totalDeals; i++)
+   //--- Closed exits today (from history)
+   if(HistorySelect(dayStart, TimeCurrent()))
    {
-      ulong ticket = HistoryDealGetTicket(i);
-      if(ticket == 0)
-         continue;
-
-      //--- Only our magic number
-      if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber)
-         continue;
-
-      //--- Only this symbol
-      if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _Symbol)
-         continue;
-
-      int entry = (int)HistoryDealGetInteger(ticket, DEAL_ENTRY);
-
-      //--- Count exits as completed trades
-      if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_INOUT)
+      int totalDeals = HistoryDealsTotal();
+      for(int i = 0; i < totalDeals; i++)
       {
-         todayPnL += HistoryDealGetDouble(ticket, DEAL_PROFIT)
-                   + HistoryDealGetDouble(ticket, DEAL_SWAP)
-                   + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
-         todayTrades++;
+         ulong ticket = HistoryDealGetTicket(i);
+         if(ticket == 0) continue;
+         if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
+         if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _Symbol) continue;
+
+         int entry = (int)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+         if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_INOUT)
+         {
+            todayPnL += HistoryDealGetDouble(ticket, DEAL_PROFIT)
+                      + HistoryDealGetDouble(ticket, DEAL_SWAP)
+                      + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+            todayTrades++;
+         }
       }
+   }
+
+   //--- Plus any still-open position opened today (so the count doesn't dip while a trade runs)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!g_posInfo.SelectByIndex(i)) continue;
+      if(g_posInfo.Symbol() != _Symbol || g_posInfo.Magic() != MagicNumber) continue;
+      if(g_posInfo.Time() >= dayStart) todayTrades++;
    }
 }
 
@@ -124,6 +123,21 @@ void ResetDailyCounters()
    }
 }
 
+#ifdef BACKTEST_MODE
+//=== BACKTEST_MODE: UI stubs (no chart objects, no rendering) ======
+void CreateLabel(string n, int y, color c = clrWhite) {}
+void InitDashboard() {}
+void UpdateDashboard(string s) {}
+void RemoveWindowObjects() {}
+void DrawSlidingWindow() {}
+void DisplayCandleDeltas() {}
+color GetCellBgColor(int d, bool isPOC) { return clrBlack; }
+color GetCellTxColor(int d) { return clrWhite; }
+void BuildBarFootprint(int barIndex, datetime barTime, double barHigh,
+                       int periodSec, double cellHeight, double basePrice) {}
+void DisplayFootprint() {}
+void RemoveDashboard() {}
+#else
 //+------------------------------------------------------------------+
 //| Create a dashboard label object                                   |
 //+------------------------------------------------------------------+
@@ -151,14 +165,16 @@ void InitDashboard()
       return;
 
    string prefix = EA_NAME + "_dash_";
-   ArrayResize(g_dashLabels, 7);
+   ArrayResize(g_dashLabels, 9);
    g_dashLabels[0] = prefix + "title";
    g_dashLabels[1] = prefix + "cumdelta";
    g_dashLabels[2] = prefix + "livedelta";
-   g_dashLabels[3] = prefix + "trades";
-   g_dashLabels[4] = prefix + "pnl";
-   g_dashLabels[5] = prefix + "spread";
-   g_dashLabels[6] = prefix + "status";
+   g_dashLabels[3] = prefix + "session";
+   g_dashLabels[4] = prefix + "trades";
+   g_dashLabels[5] = prefix + "pnl";
+   g_dashLabels[6] = prefix + "spread";
+   g_dashLabels[7] = prefix + "adx";
+   g_dashLabels[8] = prefix + "status";
 
    for(int i = 0; i < ArraySize(g_dashLabels); i++)
       CreateLabel(g_dashLabels[i], i * DASHBOARD_LINE_HEIGHT);
@@ -189,23 +205,42 @@ void UpdateDashboard(string status)
       " (up:" + IntegerToString(g_uptickCount) + " dn:" + IntegerToString(g_downtickCount) + ")");
    ObjectSetInteger(0, g_dashLabels[2], OBJPROP_COLOR, clrSilver);
 
+   //--- Session line
    ObjectSetString(0, g_dashLabels[3], OBJPROP_TEXT,
-      "Trades: " + IntegerToString(g_dailyTradeCount) + "/" + IntegerToString(MaxDailyTrades));
+      "Session: " + SessionName(g_currentSession) +
+      "  W:" + IntegerToString(g_sessionWins) +
+      "  L:" + IntegerToString(g_sessionLosses));
+   ObjectSetInteger(0, g_dashLabels[3], OBJPROP_COLOR,
+      g_currentSession == SESSION_NONE ? clrGray : clrAqua);
 
+   //--- Trade counts (daily / session)
    ObjectSetString(0, g_dashLabels[4], OBJPROP_TEXT,
-      "PnL: " + DoubleToString(g_dailyPnL, 2));
-   ObjectSetInteger(0, g_dashLabels[4], OBJPROP_COLOR,
-      g_dailyPnL >= 0 ? clrLime : clrRed);
+      "Trades: D " + IntegerToString(g_dailyTradeCount) + "/" + IntegerToString(MaxDailyTrades) +
+      "   S " + IntegerToString(g_sessionTradeCount) + "/" + IntegerToString(MaxTradesPerSession));
 
    ObjectSetString(0, g_dashLabels[5], OBJPROP_TEXT,
-      "Spread: " + IntegerToString(spread) + " pts");
+      "PnL: " + DoubleToString(g_dailyPnL, 2));
    ObjectSetInteger(0, g_dashLabels[5], OBJPROP_COLOR,
+      g_dailyPnL >= 0 ? clrLime : clrRed);
+
+   //--- Spread current vs rolling avg
+   double avgSpread = GetAvgSpread();
+   ObjectSetString(0, g_dashLabels[6], OBJPROP_TEXT,
+      "Spread: " + IntegerToString(spread) + " pts (avg " + DoubleToString(avgSpread, 1) + ")");
+   ObjectSetInteger(0, g_dashLabels[6], OBJPROP_COLOR,
       spread <= MaxSpreadPoints ? clrWhite : clrOrangeRed);
 
-   ObjectSetString(0, g_dashLabels[6], OBJPROP_TEXT,
+   //--- ADX
+   double adx = GetADX();
+   ObjectSetString(0, g_dashLabels[7], OBJPROP_TEXT,
+      "ADX(M15): " + DoubleToString(adx, 1) + " (need " + DoubleToString(ADXThreshold, 1) + ")");
+   ObjectSetInteger(0, g_dashLabels[7], OBJPROP_COLOR,
+      adx >= ADXThreshold ? clrLime : clrSilver);
+
+   ObjectSetString(0, g_dashLabels[8], OBJPROP_TEXT,
       "Status: " + status);
-   ObjectSetInteger(0, g_dashLabels[6], OBJPROP_COLOR,
-      status == "ACTIVE" ? clrLime : clrOrangeRed);
+   ObjectSetInteger(0, g_dashLabels[8], OBJPROP_COLOR,
+      StringFind(status, "ACTIVE") == 0 ? clrLime : clrOrangeRed);
 
    //--- Draw sliding window rectangle, per-candle deltas, and footprint
    DrawSlidingWindow();
@@ -554,5 +589,6 @@ void RemoveDashboard()
 
    RemoveWindowObjects();
 }
+#endif // BACKTEST_MODE
 
-#endif
+#endif // UTILS_MQH

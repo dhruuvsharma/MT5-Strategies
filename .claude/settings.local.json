@@ -15,7 +15,11 @@
       "Bash(cp /tmp/recent_transcripts.txt /c/Users/dhruv/AppData/Local/Temp/recent_transcripts.txt)",
       "Bash(cp /tmp/extract_tools.py /c/Users/dhruv/AppData/Local/Temp/extract_tools.py)",
       "Bash(git -C /d/Github/mt5-ea diff README.md .memory/REPO_MAP.md .claude/settings.local.json)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)",
+      "Bash(mv D:/Github/mt5-ea D:/Github/MT5-Strategies)",
+      "Read(//d/Github/**)"
     ]
   }
 }

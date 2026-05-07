@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| Trade.mqh — Order placement, modification, position management    |
+//| Trade.mqh — Order placement, fast exits, breakeven                |
 //+------------------------------------------------------------------+
 #ifndef TRADE_MQH
 #define TRADE_MQH
@@ -8,11 +8,11 @@
 #include <Trade/PositionInfo.mqh>
 #include "Risk.mqh"
 
-CTrade         g_trade;
-CPositionInfo  g_posInfo;
+CTrade        g_trade;
+CPositionInfo g_posInfo;
 
 //+------------------------------------------------------------------+
-//| Initialize trade object                                           |
+//| One-shot init                                                     |
 //+------------------------------------------------------------------+
 void TradeInit()
 {
@@ -22,7 +22,7 @@ void TradeInit()
 }
 
 //+------------------------------------------------------------------+
-//| Check if we already have a position on this symbol with our magic |
+//| Do we already have a position on this symbol+magic?              |
 //+------------------------------------------------------------------+
 bool HasOpenPosition()
 {
@@ -38,118 +38,184 @@ bool HasOpenPosition()
 }
 
 //+------------------------------------------------------------------+
-//| Open a trade in the given direction                                |
+//| Open a market order in the given direction with risk-based lots  |
 //+------------------------------------------------------------------+
 bool OpenTrade(int direction)
 {
    double slDist = CalcSLDistance();
    double tpDist = CalcTPDistance();
-
-   if(slDist == 0.0 || tpDist == 0.0)
+   if(slDist <= 0 || tpDist <= 0)
    {
-      Print(EA_PREFIX, "Invalid SL/TP distance. SL=", slDist, " TP=", tpDist);
+      Print(EA_PREFIX, "Invalid SL/TP. SL=", slDist, " TP=", tpDist);
       return false;
    }
 
-   bool result = false;
-
-   if(direction > 0) // BUY
+   double lots = CalcLotSize();
+   if(lots <= 0)
    {
-      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double sl  = NormalizeDouble(ask - slDist, _Digits);
-      double tp  = NormalizeDouble(ask + tpDist, _Digits);
-
-      result = g_trade.Buy(LotSize, _Symbol, ask, sl, tp, EAComment);
-      if(result)
-         Print(EA_PREFIX, "BUY opened at ", ask, " SL=", sl, " TP=", tp);
-      else
-         Print(EA_PREFIX, "BUY failed. Error: ", GetLastError());
-   }
-   else if(direction < 0) // SELL
-   {
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double sl  = NormalizeDouble(bid + slDist, _Digits);
-      double tp  = NormalizeDouble(bid - tpDist, _Digits);
-
-      result = g_trade.Sell(LotSize, _Symbol, bid, sl, tp, EAComment);
-      if(result)
-         Print(EA_PREFIX, "SELL opened at ", bid, " SL=", sl, " TP=", tp);
-      else
-         Print(EA_PREFIX, "SELL failed. Error: ", GetLastError());
+      Print(EA_PREFIX, "Lot size = 0. Skipping.");
+      return false;
    }
 
-   if(result)
-   {
-      g_dailyTradeCount++;
-      g_breakevenApplied = false;
-   }
+   bool   ok    = false;
+   double price = 0.0, sl = 0.0, tp = 0.0;
 
-   return result;
+   if(direction > 0)
+   {
+      price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      sl = NormalizeDouble(price - slDist, _Digits);
+      tp = NormalizeDouble(price + tpDist, _Digits);
+      ok = g_trade.Buy(lots, _Symbol, 0.0, sl, tp, EAComment);
+   }
+   else if(direction < 0)
+   {
+      price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      sl = NormalizeDouble(price + slDist, _Digits);
+      tp = NormalizeDouble(price - tpDist, _Digits);
+      ok = g_trade.Sell(lots, _Symbol, 0.0, sl, tp, EAComment);
+   }
+   else return false;
+
+   if(ok)
+   {
+      g_breakevenApplied   = false;
+      g_lastTradeTime      = TimeCurrent();
+      g_openTradeTime      = TimeCurrent();
+      g_openTradeDirection = direction;
+      g_sessionTradeCount++;
+#ifndef BACKTEST_MODE
+      Print(EA_PREFIX, (direction > 0 ? "BUY" : "SELL"),
+            " opened. Lots=", lots, " SL=", sl, " TP=", tp,
+            " Session=", SessionName(g_currentSession));
+#endif
+   }
+#ifndef BACKTEST_MODE
+   else
+      Print(EA_PREFIX, "Open failed. Dir=", direction, " Error=", GetLastError());
+#endif
+
+   return ok;
 }
 
 //+------------------------------------------------------------------+
-//| Manage open trade: breakeven logic                                 |
+//| Close our matching position by ticket                             |
 //+------------------------------------------------------------------+
-void ManageOpenTrade()
+void CloseOurPosition(string reason)
 {
-   if(g_breakevenApplied)
-      return;
-
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      if(!g_posInfo.SelectByIndex(i))
-         continue;
-      if(g_posInfo.Symbol() != _Symbol || g_posInfo.Magic() != MagicNumber)
-         continue;
+      if(!g_posInfo.SelectByIndex(i)) continue;
+      if(g_posInfo.Symbol() != _Symbol || g_posInfo.Magic() != MagicNumber) continue;
+
+      if(g_trade.PositionClose(g_posInfo.Ticket()))
+      {
+#ifndef BACKTEST_MODE
+         Print(EA_PREFIX, "Position closed. Reason=", reason);
+#endif
+         g_openTradeDirection = 0;
+         g_openTradeTime      = 0;
+      }
+#ifndef BACKTEST_MODE
+      else
+         Print(EA_PREFIX, "Close failed. Error=", GetLastError());
+#endif
+      return;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Move SL to entry + buffer once profit threshold is hit            |
+//+------------------------------------------------------------------+
+void ApplyBreakeven()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!g_posInfo.SelectByIndex(i)) continue;
+      if(g_posInfo.Symbol() != _Symbol || g_posInfo.Magic() != MagicNumber) continue;
 
       double openPrice = g_posInfo.PriceOpen();
       double currentSL = g_posInfo.StopLoss();
-      double point     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-      double beBuffer  = BE_BUFFER_PIPS * 10.0 * point; // Convert pips to price
+      double tp        = g_posInfo.TakeProfit();
+      double beBuffer  = BE_BUFFER_PIPS * g_pipSize;
 
       if(g_posInfo.PositionType() == POSITION_TYPE_BUY)
       {
          double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         double profitPips = (bid - openPrice) / (10.0 * point);
-
-         if(profitPips >= BreakevenPips)
+         double profitPips = (bid - openPrice) / g_pipSize;
+         if(profitPips < BreakevenPips) return;
+         double newSL = NormalizeDouble(openPrice + beBuffer, _Digits);
+         if(newSL > currentSL && g_trade.PositionModify(g_posInfo.Ticket(), newSL, tp))
          {
-            double newSL = NormalizeDouble(openPrice + beBuffer, _Digits);
-            if(newSL > currentSL)
-            {
-               if(g_trade.PositionModify(g_posInfo.Ticket(), newSL, g_posInfo.TakeProfit()))
-               {
-                  Print(EA_PREFIX, "Breakeven applied. New SL=", newSL);
-                  g_breakevenApplied = true;
-               }
-               else
-                  Print(EA_PREFIX, "Breakeven modify failed. Error: ", GetLastError());
-            }
+            g_breakevenApplied = true;
+#ifndef BACKTEST_MODE
+            Print(EA_PREFIX, "BE applied. SL=", newSL);
+#endif
          }
       }
       else if(g_posInfo.PositionType() == POSITION_TYPE_SELL)
       {
          double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         double profitPips = (openPrice - ask) / (10.0 * point);
-
-         if(profitPips >= BreakevenPips)
+         double profitPips = (openPrice - ask) / g_pipSize;
+         if(profitPips < BreakevenPips) return;
+         double newSL = NormalizeDouble(openPrice - beBuffer, _Digits);
+         if((currentSL == 0.0 || newSL < currentSL) && g_trade.PositionModify(g_posInfo.Ticket(), newSL, tp))
          {
-            double newSL = NormalizeDouble(openPrice - beBuffer, _Digits);
-            if(currentSL == 0.0 || newSL < currentSL)
-            {
-               if(g_trade.PositionModify(g_posInfo.Ticket(), newSL, g_posInfo.TakeProfit()))
-               {
-                  Print(EA_PREFIX, "Breakeven applied. New SL=", newSL);
-                  g_breakevenApplied = true;
-               }
-               else
-                  Print(EA_PREFIX, "Breakeven modify failed. Error: ", GetLastError());
-            }
+            g_breakevenApplied = true;
+#ifndef BACKTEST_MODE
+            Print(EA_PREFIX, "BE applied. SL=", newSL);
+#endif
          }
       }
-
-      break; // Only one position expected
+      return;
    }
+}
+
+//+------------------------------------------------------------------+
+//| Time exit: close at market if neither TP/SL hit by deadline       |
+//+------------------------------------------------------------------+
+bool _TryTimeExit()
+{
+   if(MaxTradeSeconds <= 0 || g_openTradeTime <= 0) return false;
+   if(TimeCurrent() < g_openTradeTime + MaxTradeSeconds) return false;
+   CloseOurPosition("TIME_EXIT");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Adverse delta: close when cumDelta crosses against position       |
+//+------------------------------------------------------------------+
+bool _TryAdverseExit()
+{
+   if(!AdverseDeltaExit || g_openTradeTime <= 0 || g_openTradeDirection == 0)
+      return false;
+   if(TimeCurrent() - g_openTradeTime < AdverseDeltaCooldown) return false;
+
+   int cum = CalculateCumDelta();
+   bool adverse = (g_openTradeDirection > 0 && cum < -DeltaThreshold) ||
+                  (g_openTradeDirection < 0 && cum >  DeltaThreshold);
+   if(!adverse) return false;
+   CloseOurPosition("ADVERSE_DELTA");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Manage open trade: time exit → adverse exit → breakeven           |
+//+------------------------------------------------------------------+
+void ManageOpenTrade()
+{
+   if(!HasOpenPosition())
+   {
+      if(g_openTradeDirection != 0)
+      {
+         g_openTradeDirection = 0;
+         g_openTradeTime      = 0;
+      }
+      return;
+   }
+   if(_TryTimeExit())    return;
+   if(_TryAdverseExit()) return;
+   if(UseBreakeven && !g_breakevenApplied)
+      ApplyBreakeven();
 }
 
 #endif

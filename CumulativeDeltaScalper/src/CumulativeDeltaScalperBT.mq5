@@ -1,27 +1,25 @@
 //+------------------------------------------------------------------+
-//| CumulativeDeltaScalper.mq5                                        |
-//| Expert Advisor: CumulativeDeltaScalper                            |
-//| Version: 1.0                                                      |
-//| Description: Scalps EURUSD on short timeframes using cumulative   |
-//|   tick-level delta in a sliding window. Enters when delta crosses |
-//|   a threshold, filtered by 15M EMA trend and session/risk guards. |
-//| Author: Dhruv Sharma                                              |
-//| Date: 2025-04-11                                                  |
+//| CumulativeDeltaScalperBT.mq5                                      |
+//| Backtest-mode entry point — same logic, no UI, no per-tick Prints |
+//| Strips dashboard / footprint / sliding-window rendering and all   |
+//| per-tick Print calls so optimization sweeps run faster.           |
 //+------------------------------------------------------------------+
 #property copyright "Dhruv Sharma"
-#property link      ""
 #property version   "2.00"
-#property description "Cumulative Delta Scalper v2 — sniper sessions, risk-based sizing, fast exits"
+#property description "CDScalper v2 — BACKTEST BUILD (UI stripped, no per-tick logs)"
 
-//--- Include all layers
+//--- Compile-time switch: causes all Utils UI funcs to be no-op stubs
+//--- and all per-tick Prints in Market/Signal/Trade/Risk to compile out.
+//--- Defined BEFORE any include so the flag propagates through the chain.
+#define BACKTEST_MODE
+
 #include "Utils.mqh"
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                    |
+//| OnInit — same validation as live EA                               |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   //--- Validate inputs
    if(WindowSize < 2)
    {
       Print(EA_PREFIX, "WindowSize must be >= 2"); return INIT_PARAMETERS_INCORRECT;
@@ -54,67 +52,52 @@ int OnInit()
       Print(EA_PREFIX, "MinConfirmations must be 0..5"); return INIT_PARAMETERS_INCORRECT;
    }
 
-   //--- Initialize market data and indicator handles
    if(!MarketInit())
       return INIT_FAILED;
 
-   //--- Initialize trade object
    TradeInit();
 
-   //--- Initialize daily counters
-   g_lastTradeDay = 0; // Force reset on first tick
-   g_lastLossTime = 0;
+   g_lastTradeDay     = 0;
+   g_lastLossTime     = 0;
    g_breakevenApplied = false;
 
-   //--- Initialize dashboard
-   InitDashboard();
-
-   Print(EA_PREFIX, "Initialized. Window=", WindowSize,
-         " Threshold=", DeltaThreshold, " Magic=", MagicNumber);
+   //--- No InitDashboard call — UI stripped via BACKTEST_MODE
+   Print(EA_PREFIX, "[BT] Initialized. Window=", WindowSize,
+         " Threshold=", DeltaThreshold, " MinConf=", MinConfirmations,
+         " Magic=", MagicNumber);
    return INIT_SUCCEEDED;
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                  |
+//| OnDeinit                                                          |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
    MarketDeinit();
-   RemoveDashboard();
-   Print(EA_PREFIX, "Deinitialized. Reason=", reason);
+   //--- No RemoveDashboard call needed (no objects were created)
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                              |
+//| OnTick — identical orchestration to live EA, minus dashboard      |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   //--- Daily / session bookkeeping
+   //--- BT: CheckLastTradeLoss skipped — OnTradeTransaction is authoritative
    ResetDailyCounters();
    UpdateSessionState();
-   GetDailyStats(g_dailyPnL, g_dailyTradeCount);
-   CheckLastTradeLoss();
-
-   //--- Tick + candle pipeline
    ProcessTick();
    if(IsNewCandle())
       FinalizeCandle();
 
-   //--- Manage open position (time exit, adverse-delta exit, breakeven)
    if(HasOpenPosition())
    {
       ManageOpenTrade();
-      UpdateDashboard("ACTIVE (in trade)");
       return;
    }
 
-   //--- Guards (session, counts, cooldowns, volatility, hard spread cap)
    string guardReason;
-   bool guardsOK = CheckGuards(guardReason);
-   UpdateDashboard(guardReason);
-   if(!guardsOK) return;
+   if(!CheckGuards(guardReason)) return;
 
-   //--- Sniper signal (crossover + N-of-5 confirmations)
    int signal = CheckSniperSignal();
    if(signal == 0) return;
 
@@ -122,7 +105,7 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Trade-close detection: update session W/L + last-loss timer       |
+//| Trade-close detection: session W/L tracking + last-loss timer     |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction& trans,
                         const MqlTradeRequest& request,
@@ -132,6 +115,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    if(!HistoryDealSelect(trans.deal)) return;
    if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != MagicNumber) return;
    if(HistoryDealGetString(trans.deal, DEAL_SYMBOL) != _Symbol) return;
+
+   //--- BT: refresh daily PnL+count here instead of every tick
+   GetDailyStats(g_dailyPnL, g_dailyTradeCount);
 
    int entry = (int)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
    if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) return;
@@ -149,10 +135,5 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
 
    g_openTradeDirection = 0;
    g_openTradeTime      = 0;
-
-#ifndef BACKTEST_MODE
-   Print(EA_PREFIX, "Exit deal #", trans.deal, " profit=", profit,
-         " session W/L=", g_sessionWins, "/", g_sessionLosses);
-#endif
 }
 //+------------------------------------------------------------------+
