@@ -1,28 +1,47 @@
-# MT5 EA & Indicators
+# Trading-Strategies
 
-A personal collection of MetaTrader 5 Expert Advisors and indicators built and maintained by **Dhruv Sharma**.
+A multi-platform algorithmic trading repository — MetaTrader 5 (MQL5) and cTrader (cAlgo / C#) versions of the same strategies, kept in parity where the platforms allow.
 
-## Projects
+Maintained by **Dhruv Sharma**.
 
-| Name | Type | Instrument | Strategy | Status |
-|------|------|-----------|----------|--------|
-| [SwingTagEA](./SwingTagEA) | EA | DAX / GER40 | 3-bar swing pivot fade — limit orders at swing highs/lows | Active |
-| [DeltaFadeEA](./DeltaFadeEA) | EA | DAX / GER40 | Contrarian scalper — fades cumulative tick/volume delta extremes using dynamic Median+MAD thresholds, confirmed by volume-weighted price line slope. Trailing stop | Active |
-| [CumulativeDeltaScalper](./CumulativeDeltaScalper) | EA | EURUSD M1/M3/M5 | Tick-level cumulative delta scalper — sliding window of N candle deltas, enters on threshold crossover, 15M EMA trend filter, ATR-based SL/TP, breakeven, session/spread/daily guards | Active |
-| [FootprintChartPro](./FootprintChartPro) | Indicator | Any | Professional order flow visualization — canvas-based delta cells footprint with 11 analysis panels (DOM, Volume Profile, Time & Sales, Signal Meter, etc.), 16 themes, volume inference engine, 3-tier imbalance detection. Visualization only | Active |
-| [ApexScalper](./ApexScalper) | EA | Liquid FX / index futures (EURUSD, NQ, ES) | Microstructure scalper — weighted composite of 8 order flow signals (Cumulative Delta, VPIN, shallow/deep OBI, footprint stacked imbalance, absorption, HVP regression, tape speed). Regime-adaptive weights (ADX + BB width + VPOC stability), conflict filter on top-weighted signals, SL/TP anchored to HVP nodes. Live dashboard, full CSV logging | Active |
+## Strategies
+
+| Strategy | Type | Instrument | MT5 | cTrader | Summary |
+|----------|------|-----------|:---:|:-------:|---------|
+| [SwingTagEA](./platforms/MT5/SwingTagEA) | EA | DAX / GER40 | ✅ | [✅](./platforms/cTrader/SwingTagEA) | 3-bar swing pivot fade — limit orders at swing highs/lows |
+| [DeltaFadeEA](./platforms/MT5/DeltaFadeEA) | EA | DAX / GER40 | ✅ | [✅](./platforms/cTrader/DeltaFadeEA) | Contrarian scalper — fades cumulative delta extremes via dynamic Median+MAD thresholds, VWAP slope confirmation |
+| [CumulativeDeltaScalper](./platforms/MT5/CumulativeDeltaScalper) | EA | EURUSD M1/M3/M5 | ✅ | [✅](./platforms/cTrader/CumulativeDeltaScalper) | Sniper-mode delta crossover with 5-confirmation gate; session-aware, ATR-based SL/TP |
+| [FootprintChartPro](./platforms/MT5/FootprintChartPro) | Indicator | Any | ✅ | [⚠️](./platforms/cTrader/FootprintChartPro) | Order flow visualization — delta cells + 11 analysis panels, 16 themes, imbalance detection |
+| [ApexScalper](./platforms/MT5/ApexScalper) | EA | Liquid FX / index futures | ✅ | [⚠️](./platforms/cTrader/ApexScalper) | Microstructure scalper — weighted composite of 8 order-flow signals, regime-adaptive |
+| [CandleDataCollector](./platforms/MT5/CandleDataCollector) | Utility | Any | ✅ | [✅](./platforms/cTrader/CandleDataCollector) | CSV writer — OHLC + delta + VWAP per candle |
+| [TickDataCollector](./platforms/MT5/TickDataCollector) | Utility | Any | ✅ | [✅](./platforms/cTrader/TickDataCollector) | CSV writer — per-tick records with running candle context |
+
+Legend: ✅ available · ⚠️ WIP scaffold (port in progress)
 
 ## Repository Structure
 
-Each project lives in its own folder:
+```
+platforms/
+├── MT5/
+│   └── <StrategyName>/
+│       ├── CLAUDE.md       AI assistant instructions
+│       ├── README.md       Strategy docs, inputs, version history
+│       ├── .memory/        Memory files for AI context continuity
+│       └── src/            .mq5 / .mqh sources
+└── cTrader/
+    ├── README.md           Platform conventions + cAlgo cheat sheet
+    └── <StrategyName>/
+        ├── CLAUDE.md
+        ├── README.md       MT5 parity notes, parameter mapping, gaps
+        ├── .memory/
+        └── src/            .cs source
+```
 
-```
-<ProjectName>/
-├── CLAUDE.md          # AI assistant instructions for this project
-├── README.md          # Strategy docs, inputs reference, version history
-├── .memory/           # Memory files for AI context continuity
-└── src/               # Source files (.mq5, .mqh)
-```
+## Working Conventions
+
+- Each strategy is portable — same name, same parameters, same intent across platforms.
+- See [`platforms/cTrader/README.md`](./platforms/cTrader/README.md) for the MT5 → cAlgo API cheat sheet.
+- Repository workflow + memory-file conventions are documented in [`CLAUDE.md`](./CLAUDE.md).
 
 ## Author
 
