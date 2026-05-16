@@ -1,7 +1,7 @@
 # Repo Map
 
 ## Last Updated
-2026-05-10
+2026-05-15
 
 ## Layout
 ```
@@ -55,3 +55,36 @@ Legend: ✅ available · ⚠️ WIP / scaffolded stub · ❌ not ported
 - Original file: `SlidingWindow.mq5` (UTF-16, 2160 lines) → decoupled into `platforms/MT5/DeltaFadeEA/`
 - ApexScalper imported 2026-04-29 from external repo (`github.com/dhruuvsharma/mt5-microstructure-scalper`); folder renamed to `ApexScalper`.
 - 2026-05-10 — Repository restructured under `platforms/MT5/` and `platforms/cTrader/`. cTrader ports added for the 5 small strategies; ApexScalper and FootprintChartPro scaffolded as WIP. Repo renamed to `Trading-Strategies`.
+- 2026-05-15 — Imported legacy EAs under `platforms/MT5/Drafts/`. Deduplicated 4 families into single main versions; broken WIP `FSX-Delta` discarded after grafting its working session-rectangle code into `FrameAlgo`. None of the drafts are decoupled yet — they are raw `.mq5` files awaiting evaluation before porting into the layered `platforms/MT5/<StrategyName>/` layout.
+
+## Drafts Inventory (`platforms/MT5/Drafts/`)
+
+Legacy EAs and indicators imported as-is. **Not** decoupled into Config/Market/Signal/Risk/Trade/Utils layers.
+
+| Family | Main file | Description |
+|--------|-----------|-------------|
+| Ladder | `GoldenLadder EA.mq5` (v2.00) | Pending stop-order ladder around bar open in a time window. Absorbed: `GoldenLadderAdvanceEA` (TP-hit watchdog), `StatArbX` (UseServerTime + prev-candle ref), `StatArbX_Valid_March` (expiration time-bomb), `XAUUSD HFT`. Toggle features via inputs. |
+| TV Bridge | `DaxAlgo - TradingViewBridge.mq5` (v2.00, UTF-16, 62KB) | Full-feature CSV-bridge with risk management, breakeven, daily P&L caps, news filter, dynamic lot. Absorbed: `bridge debug script`, `DaxAlgo - TradingViewMT5Bridge`, `SimpleTradingViewBridge`, `DaxAlgo - TradingViewToMT5Bridge`. |
+| 3-bar pattern | `DaxAlgo - FrameAlgo.mq5` | 3-candle C1/C2/C3 pattern → SmartLimit / DirectExecute, RectHL or unit SL, fixed-step trailing, session rectangles (Asia/London/NY/Pacific), per-bar tick-delta in trade comments + chart label. Absorbed: `DaxAlgo-StratRec`. Discarded: broken `DaxAlgo - FSX-Delta` (after grafting its session-draw body in). |
+| RSI Envelope | `Envelope Oscillator.mq5` (v2.00) | RSI crossover entry/exit with symbol-aware SL/TP validation (SYMBOL_TRADE_STOPS_LEVEL), retry-on-error, post-fill stop verification. Absorbed: `LSF-X-Engine`. |
+| Triangle + SuperTrend | `TrianglePatternForceCloseNextSignal.mq5` | Parallel implementation: 3-bar triangle + SuperTrend + RSI confluence filter. Kept separate from FrameAlgo. |
+| Renko | `DaxAlgo - RenkoPAT.mq5` | Consecutive-brick entry/exit, per-hour toggles, brick-trail SL. |
+| Renko display | `DaxAlgo - RenkoDisplay.mq5`, `renko2.mq5` (Guilherme Santos, third-party) | Visualization only. |
+| Adaptive RSI | `DaxAlgoRSI.mq5` | ARSI with manual SMA/EMA/SMMA calculation. |
+| NW envelope EA | `DaxAlgoNDE_MFT.mq5`, `DaxAlgo.mq5` | Nadaraya-Watson envelope strategy + base chart-styling EA. |
+| NW indicator | `Nadaraya Watson Envelope.mq5` | Gaussian kernel + MAE bands. |
+| SuperTrend | `SuperTrendEA.mq5` | SuperTrend + EMA + ADX filters. |
+| SpeedBased | `SpeedBasedEA.mq5` | Price-speed + LSF slope + Kalman + MTF confirmation dashboard. |
+| Trend indicator | `TrendIndicator.mq5` | ATR breakout (buggy — calls iMA inside OnCalculate loop). |
+| StratTagger src | `DaxAlgo - StratTagger.mq5` | Source of `platforms/MT5/SwingTagEA/`. |
+| SlidingWindow src | `DaxAlgo - SlidingWindow.mq5` (UTF-16) | Source of `platforms/MT5/DeltaFadeEA/`. |
+
+### Excluded from repo (kept locally only)
+- `TrendEA(DeepSeek).mq5` — broken (unbalanced `)` on line 82, won't compile).
+- `DaxAlgo - AdvanceRecStrat.mq5` — empty OnInit/OnTick scaffold.
+- `MachineIDGenerator.mq5`, `LicenceGenerator.mq5`, `LicenceValidator.mq5` — license-flow utilities, intentionally not published.
+- All `*.ex5` compiled binaries (gitignored repo-wide).
+- Third-party paid binaries with no source (`LuxAlgo - *.ex5`, `Trend Catcher with Alert MT5.ex5`, `Range Breakout EA.ex5`, `DaxAlgoHFT/Prime/Wave.ex5`).
+
+### Known issues in committed Drafts
+- 3 files are UTF-16 with BOM (`DaxAlgo - SlidingWindow.mq5`, `DaxAlgo - TradingViewBridge.mq5`, `renko2.mq5`). Compile fine but awkward to diff.
